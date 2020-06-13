@@ -1,0 +1,127 @@
+on:
+  schedule:
+    - cron: '30 6 * * TUE,Fri'
+  watch:
+    types:
+      - started
+env:
+  REPO_URL: git@code.baidu.com:Paxxs/AutoSigner.git
+  REPO_BRANCH: develop
+  UPLOAD_COWTRANSFER: "true"
+  UPLOAD_WETRANSFER: "true"
+  UPLOAD_BITSEND: "true"
+  UPLOAD_GOFILE: "true"
+  UPLOAD_WENSHUSHU: "false"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+        # /home/runner/work/AutoSigner/AutoSigner
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Initialization environment
+        run: |
+          sudo mkdir -p /go/src
+          sudo chown $USER:$GROUPS /go
+          sudo chown $USER:$GROUPS /go/src
+
+      - name: Install SSH key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.SSH_KEY }}
+          name: id_rsa-bastion
+          known_hosts: ${{ secrets.KNOWN_HOSTS }}
+          config: ${{ secrets.CONFIG }} # ssh_config; optional
+
+        # GOPATH="/home/runner/go"
+      - name: Setup Go environment
+        uses: actions/setup-go@v2
+
+        # /home/runner/work/AutoSigner/AutoSigner/sign
+      - name: Checkout source Code
+        working-directory: /go/src
+        run: |
+          git clone $REPO_URL -b $REPO_BRANCH sign
+          ls ./sign/ -al
+
+      - name: Setup Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: '^1.14.3'
+      
+      - name: Go mod init
+        working-directory: /go/src/sign
+        run: |
+          go get github.com/mitchellh/gox
+          go get github.com/josephspurrier/goversioninfo/cmd/goversioninfo
+          echo $PATH
+          go env
+          go env -w GO111MODULE=on
+          go mod download
+          go build
+          pwd
+          ls -hal
+
+      - name: Compile AutoSigner
+        working-directory: /go/src/sign
+        shell: pwsh
+          # ls "$(go env GOPATH)/bin"
+          # $Env:Path=$Env:Path+=":$(go env GOPATH)/bin"
+          # write-host $Env:Path
+        run: |
+          ./build.ps1 -UpdateVersion -BuildType all -Parallel 7
+          Get-ChildItem ./bin/
+
+      - name: Prepare artifact
+        id: organize
+        working-directory: /go/src/sign
+        shell: pwsh
+          # New-Item -Path ./bin/.config -ItemType Directory
+          # New-Item -Path ./bin/.config/empty -ItemType File
+        run: |
+          Copy-Item -Path ./config_example.yml -Destination ./bin/config.yml
+          $ProgressPreference = "SilentlyContinue"
+          Compress-Archive -Path ./bin/* -DestinationPath ./AutoSigner.zip -CompressionLevel Optimal
+          echo "::set-output name=status::success"
+
+      - name: Upload AutoSigner to cowtransfer
+        working-directory: /go/src/sign
+        if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true'
+        run: |
+          curl -fsSL git.io/file-transfer | sh
+          ./transfer cow --block 2621440 -s -p 64 --no-progress ./AutoSigner.zip 2>&1 | tee cowtransfer.log
+          echo "::warning file=cowtransfer.com::$(cat cowtransfer.log | grep https)"
+
+      - name: Upload AutoSigner to WeTransfer
+        working-directory: /go/src/sign
+        if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true'
+        run: |
+          curl -fsSL git.io/file-transfer | sh
+          ./transfer wet -s -p 16 --no-progress ./AutoSigner.zip 2>&1 | tee wetransfer.log
+          echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
+
+      - name: Upload AutoSigner to BitSend
+        working-directory: /go/src/sign
+        if: steps.organize.outputs.status == 'success' && env.UPLOAD_BITSEND == 'true'
+        run: |
+          curl -fsSL git.io/file-transfer | sh
+          ./transfer bit --no-progress ./AutoSigner.zip 2>&1 | tee bitsend.log
+          echo "::warning file=bitsend.jp::$(cat bitsend.log | grep download)"
+
+      - name: Upload AutoSigner to GoFile
+        working-directory: /go/src/sign
+        if: steps.organize.outputs.status == 'success' && env.UPLOAD_GOFILE == 'true'
+        run: |
+          curl -fsSL git.io/file-transfer | sh
+          ./transfer gof --no-progress ./AutoSigner.zip 2>&1 | tee gofile.log
+          echo "::warning file=gofile.io::$(cat gofile.log | grep https)"
+
+      - name: Upload AutoSigner to WenShuShu
+        working-directory: /go/src/sign
+        if: steps.organize.outputs.status == 'success' && env.UPLOAD_WENSHUSHU == 'true'
+        run: |
+          curl -fsSL git.io/file-transfer | sh
+          ./transfer wss -p 16 --no-progress ./AutoSigner.zip 2>&1 | tee wenshushu.log
+          echo "::warning file=wenshushu.cn::$(cat wenshushu.log | grep https)"
